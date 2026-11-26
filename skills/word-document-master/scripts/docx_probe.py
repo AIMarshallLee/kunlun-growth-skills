@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""docx_probe.py — Word (.docx) / 文本结构只读体检脚本（零第三方依赖）。
+"""docx_probe.py — Read-only OOXML (.docx) & outline structural probe (zero third-party dependencies).
 
-用法:
+Usage:
   python3 scripts/docx_probe.py --file report.docx --pretty
   python3 scripts/docx_probe.py --file notice.docx --standard gb9704 --pretty
-  python3 scripts/docx_probe.py --text "# 标题\n正文内容" --pretty
+  python3 scripts/docx_probe.py --text "# Title\nBody content" --pretty
 
-退出码:
-  0  PASS / WARN（结构合法，可参考建议优化）
-  2  E01 缺少必填参数或参数组合无效
-  3  E02 文件不存在或路径越界
-  4  E03 文件非合法 .docx / XML 解析失败
-  5  E04 文件体积或内容超过安全阈值
-  6  E05 命中硬性阻断缺陷（如无有效正文/大面积缺样式且含未清理标记）
+Exit codes:
+  0  PASS / WARN
+  2  E01 Missing or conflicting arguments
+  3  E02 File not found
+  4  E03 Invalid .docx or XML parse error
+  5  E04 Uncompressed size > 120 MB safety guard
+  6  E05 Empty document or blocking structural defect
 """
 from __future__ import annotations
 
@@ -56,17 +56,17 @@ def probe_text_outline(text: str, standard: str) -> dict[str, Any]:
     lines = text.splitlines()
     non_empty = [ln for ln in lines if ln.strip()]
     if not non_empty:
-        fail("E05", "输入文本为空，无法生成文档结构检查", "请提供至少一段正文或标题文本，或传入 --file <path.docx>。", 6)
+        fail("E05", "Input text is empty; cannot probe structure.", "Provide at least one heading or paragraph, or pass --file <path.docx>.", 6)
     headings = [ln for ln in non_empty if re.match(r"^(#{1,4}\s+|第[一二三四五六七八九十百]+[章节条]\s+|[一二三四五六七八九十]+、)", ln.strip())]
     space_aligned = [i + 1 for i, ln in enumerate(lines) if re.search(r"\S\s{4,}\S", ln)]
     manual_num = [i + 1 for i, ln in enumerate(lines) if re.match(r"^\s*\d+\.\s+\S", ln)]
     issues: list[dict[str, str]] = []
     if not headings:
-        issues.append({"severity": "WARN", "code": "W_NO_HEADING", "detail": "未检测到明确标题层级（建议用 #/## 或「一、」「（一）」标识层级）。"})
+        issues.append({"severity": "WARN", "code": "W_NO_HEADING", "detail": "No Markdown headings (# / ##) detected; add structured headings before generating .docx."})
     if space_aligned:
-        issues.append({"severity": "WARN", "code": "W_SPACE_ALIGN", "detail": f"第 {space_aligned[:5]} 行存在连续 4 个以上空格对齐，转入 Word 后易错位。"})
+        issues.append({"severity": "WARN", "code": "W_SPACE_ALIGN", "detail": f"Line(s) {space_aligned[:5]} use 4+ consecutive spaces for alignment, which misaligns in Word."})
     if standard == "gb9704":
-        issues.append({"severity": "INFO", "code": "I_GB9704", "detail": "已选 GB/T 9704 公文标准：正式出稿需确保页边距上37/下35/左28/右26mm、仿宋三号行距固定28磅。"})
+        issues.append({"severity": "INFO", "code": "I_GB9704", "detail": "GB/T 9704 standard selected: verify margins (37/35/28/26mm) and 28pt fixed line spacing."})
     status = "WARN" if any(x["severity"] == "WARN" for x in issues) else "PASS"
     return {
         "status": status,
@@ -87,29 +87,29 @@ def probe_text_outline(text: str, standard: str) -> dict[str, Any]:
 
 def probe_docx(path: Path, standard: str) -> dict[str, Any]:
     if not path.exists() or not path.is_file():
-        fail("E02", f"找不到目标文件: {path}", "请核对文件路径是否正确，或改用 --text 传入纯文本。", 3)
+        fail("E02", f"File not found: {path}", "Verify the path or pass plain text via --text.", 3)
     if path.suffix.lower() != ".docx":
-        fail("E03", f"文件后缀不是 .docx: {path.name}", "当前脚本仅体检 .docx（OOXML）。旧版 .doc 请先用 Word/LibreOffice 另存为 .docx。", 4)
+        fail("E03", f"Expected .docx file, got: {path.name}", "Re-save legacy .doc files as .docx in Word or LibreOffice first.", 4)
 
     try:
         zf_ctx = zipfile.ZipFile(path, "r")
     except zipfile.BadZipFile:
-        fail("E03", f"文件不是有效的 ZIP/OOXML 容器: {path.name}", "可能文件已损坏或实为重命名的 .doc/.rtf，请先在办公软件另存为标准 .docx。", 4)
+        fail("E03", f"Not a valid ZIP/OOXML container: {path.name}", "File may be corrupted or a renamed .doc/.rtf.", 4)
 
     with zf_ctx as z:
         infos = z.infolist()
         total_uncompressed = sum(i.file_size for i in infos)
         if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
-            fail("E04", f"解压后体积超限 ({total_uncompressed} bytes > 120MB)", "请先压缩 word/media 内的超大图片后再进行体检。", 5)
+            fail("E04", f"Uncompressed size exceeds 120 MB guard ({total_uncompressed} bytes).", "Downscale oversized images inside word/media/ first.", 5)
         names = set(z.namelist())
         for req in ("[Content_Types].xml", "word/document.xml"):
             if req not in names:
-                fail("E03", f".docx 缺少核心部件 {req}", "请用 Word/WPS 重新另存为标准 .docx。", 4)
+                fail("E03", f"Missing required OOXML part: {req}", "Re-save as a standard .docx file.", 4)
 
         try:
             doc_root = ET.fromstring(z.read("word/document.xml"))
         except ET.ParseError as exc:
-            fail("E03", f"word/document.xml 解析失败: {exc}", "XML 节点存在语法损坏，请定位对应标签或重新导出文档。", 4)
+            fail("E03", f"Failed to parse word/document.xml: {exc}", "Fix malformed XML nodes or re-export the document.", 4)
 
         styles_root = None
         if "word/styles.xml" in names:
@@ -135,6 +135,7 @@ def probe_docx(path: Path, standard: str) -> dict[str, Any]:
     direct_run_fmt = 0
     space_align_paras = 0
     empty_spacer_paras = 0
+    has_cjk_content = False
 
     for p in paras:
         texts = "".join(t.text or "" for t in p.findall(".//w:t", NS))
@@ -142,6 +143,8 @@ def probe_docx(path: Path, standard: str) -> dict[str, Any]:
             empty_spacer_paras += 1
             continue
         non_empty_paras += 1
+        if not has_cjk_content and re.search(r"[\u4e00-\u9fff]", texts):
+            has_cjk_content = True
         p_style_el = p.find("./w:pPr/w:pStyle", NS)
         style_val = (p_style_el.get(f"{{{W_NS}}}val") or "").strip().lower() if p_style_el is not None else ""
         if style_val in HEADING_STYLE_HINTS or style_val.startswith("heading"):
@@ -161,14 +164,12 @@ def probe_docx(path: Path, standard: str) -> dict[str, Any]:
     ins_count = len(doc_root.findall(".//w:ins", NS))
     del_count = len(doc_root.findall(".//w:del", NS))
 
-    # Page margins
     margins_mm: dict[str, float | None] = {}
     pg_mar = doc_root.find(".//w:sectPr/w:pgMar", NS)
     if pg_mar is not None:
         for side in ("top", "bottom", "left", "right"):
             margins_mm[side] = twips_to_mm(pg_mar.get(f"{{{W_NS}}}{side}"))
 
-    # Check EastAsia font in styles.xml
     has_eastasia_font = False
     if styles_root is not None:
         for rf in styles_root.findall(".//w:rFonts", NS):
@@ -178,33 +179,33 @@ def probe_docx(path: Path, standard: str) -> dict[str, Any]:
 
     issues: list[dict[str, str]] = []
     if non_empty_paras == 0 and len(tables) == 0:
-        issues.append({"severity": "FAIL", "code": "F_EMPTY_DOC", "detail": "正文与表格均为空（无有效文本内容）。"})
+        issues.append({"severity": "FAIL", "code": "F_EMPTY_DOC", "detail": "Both body paragraphs and tables are empty."})
     if non_empty_paras >= 5 and heading_paras == 0:
-        issues.append({"severity": "WARN", "code": "W_NO_HEADING_STYLE", "detail": "未检测到标题样式（Heading 1/2/3），将无法生成自动目录和导航窗格。"})
+        issues.append({"severity": "WARN", "code": "W_NO_HEADING_STYLE", "detail": "No Heading 1/2/3 styles detected; automatic TOC and Navigation Pane will be empty."})
     if non_empty_paras > 0 and (direct_run_fmt / non_empty_paras) > 0.5:
-        issues.append({"severity": "WARN", "code": "W_HIGH_DIRECT_FMT", "detail": f"超过一半段落({direct_run_fmt}/{non_empty_paras})含字符直接格式，建议清理后改用样式控制。"})
+        issues.append({"severity": "WARN", "code": "W_HIGH_DIRECT_FMT", "detail": f"Over half of paragraphs ({direct_run_fmt}/{non_empty_paras}) have direct character formatting; strip overrides and use styles."})
     if space_align_paras > 0:
-        issues.append({"severity": "WARN", "code": "W_SPACE_ALIGN", "detail": f"发现 {space_align_paras} 处用多个空格对齐，跨端易错位，建议改用制表位或无框线表格。"})
+        issues.append({"severity": "WARN", "code": "W_SPACE_ALIGN", "detail": f"{space_align_paras} paragraph(s) use repeated spaces for alignment; replace with tabs or borderless tables."})
     if empty_spacer_paras > max(5, non_empty_paras * 0.4):
-        issues.append({"severity": "WARN", "code": "W_EMPTY_PARAS", "detail": f"空段落过多({empty_spacer_paras}个)，疑用回车推分页/调间距，建议改用段前距或 Ctrl+Enter 分页符。"})
+        issues.append({"severity": "WARN", "code": "W_EMPTY_PARAS", "detail": f"Too many empty spacer paragraphs ({empty_spacer_paras}); use paragraph spacing or page breaks instead."})
     if len(tables) > 0 and tables_with_repeat_header < len(tables):
-        issues.append({"severity": "WARN", "code": "W_TBL_NO_REPEAT_HDR", "detail": f"{len(tables)-tables_with_repeat_header}/{len(tables)} 个表格未开启「跨页重复标题行」。"})
+        issues.append({"severity": "WARN", "code": "W_TBL_NO_REPEAT_HDR", "detail": f"{len(tables)-tables_with_repeat_header}/{len(tables)} table(s) lack 'Repeat Header Rows' (w:tblHeader)."})
     if (ins_count + del_count) > 0:
-        issues.append({"severity": "WARN", "code": "W_UNRESOLVED_REVISIONS", "detail": f"存在 {ins_count + del_count} 处未接受/未清理修订痕迹，对外交付前需处理。"})
+        issues.append({"severity": "WARN", "code": "W_UNRESOLVED_REVISIONS", "detail": f"{ins_count + del_count} unresolved tracked change(s) found; accept or reject before final delivery."})
     if comments_count > 0:
-        issues.append({"severity": "WARN", "code": "W_UNRESOLVED_COMMENTS", "detail": f"存在 {comments_count} 条批注，对外正式发稿前请确认是否删除。"})
-    if not has_eastasia_font:
-        issues.append({"severity": "WARN", "code": "W_NO_EASTASIA_FONT", "detail": "styles.xml 未显式指定 w:eastAsia 中文字体，部分系统可能回退为默认宋体。"})
+        issues.append({"severity": "WARN", "code": "W_UNRESOLVED_COMMENTS", "detail": f"{comments_count} comment(s) present; resolve or strip before external distribution."})
+    if (has_cjk_content or standard == "gb9704") and not has_eastasia_font:
+        issues.append({"severity": "WARN", "code": "W_NO_EASTASIA_FONT", "detail": "styles.xml does not specify w:eastAsia font for CJK text; fallback rendering may occur."})
     if media_bytes > 20 * 1024 * 1024:
-        issues.append({"severity": "WARN", "code": "W_HEAVY_MEDIA", "detail": f"嵌入图片总计 {round(media_bytes/1048576, 1)}MB，建议长边压缩至 ≤1600px。"})
+        issues.append({"severity": "WARN", "code": "W_HEAVY_MEDIA", "detail": f"Embedded media totals {round(media_bytes/1048576, 1)} MB; compress images to <= 1600px."})
 
     if standard == "gb9704":
         if not margins_mm:
-            issues.append({"severity": "WARN", "code": "W_GB9704_NO_MARGIN", "detail": "未读取到页面边距节点 w:pgMar，请人工核对 GB/T 9704（上37/下35/左28/右26mm）。"})
+            issues.append({"severity": "WARN", "code": "W_GB9704_NO_MARGIN", "detail": "No w:pgMar found; verify GB/T 9704 margins (37/35/28/26mm)."})
         else:
-            diffs = [f"{k}={margins_mm.get(k)}mm(标准{v})" for k, v in GB9704_MM.items() if margins_mm.get(k) is None or abs(margins_mm[k] - v) > 1.5]
+            diffs = [f"{k}={margins_mm.get(k)}mm (expected {v})" for k, v in GB9704_MM.items() if margins_mm.get(k) is None or abs(margins_mm[k] - v) > 1.5]
             if diffs:
-                issues.append({"severity": "WARN", "code": "W_GB9704_MARGINS", "detail": "页边距不符合 GB/T 9704 公文标准：" + "，".join(diffs)})
+                issues.append({"severity": "WARN", "code": "W_GB9704_MARGINS", "detail": "Margins deviate from GB/T 9704: " + ", ".join(diffs)})
 
     has_fail = any(i["severity"] == "FAIL" for i in issues)
     status = "FAIL" if has_fail else ("WARN" if issues else "PASS")
@@ -235,17 +236,17 @@ def probe_docx(path: Path, standard: str) -> dict[str, Any]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Word (.docx) 或文档大纲只读体检工具")
-    ap.add_argument("--file", help="待检测的 .docx 文件路径")
-    ap.add_argument("--text", help="无 .docx 文件时，直接传入 Markdown/纯文本大纲预检")
-    ap.add_argument("--standard", choices=["general", "gb9704"], default="general", help="检查标准：general 通用文档 / gb9704 党政公文")
-    ap.add_argument("--pretty", action="store_true", help="格式化输出 JSON")
+    ap = argparse.ArgumentParser(description="Read-only OOXML (.docx) & document outline probe.")
+    ap.add_argument("--file", help="Path to .docx file")
+    ap.add_argument("--text", help="Inline Markdown/plain-text outline")
+    ap.add_argument("--standard", choices=["general", "gb9704"], default="general", help="Check standard: general or gb9704")
+    ap.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     args = ap.parse_args()
 
     if not args.file and not args.text:
-        fail("E01", "缺少输入参数：必须提供 --file 或 --text 之一", "示例: python3 scripts/docx_probe.py --file report.docx --pretty", 2)
+        fail("E01", "Provide one of --file or --text.", "Example: python3 scripts/docx_probe.py --file report.docx --pretty", 2)
     if args.file and args.text:
-        fail("E01", "--file 与 --text 不能同时传入", "请二选一传入。", 2)
+        fail("E01", "Cannot pass both --file and --text.", "Choose one input source.", 2)
 
     if args.text is not None:
         res = probe_text_outline(args.text, args.standard)
