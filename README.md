@@ -5,11 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Website](https://img.shields.io/badge/Website-kunlungrowth.com-0F172A)](https://kunlungrowth.com)
 
-A curated suite of **10 production-tested Agent Skills** adapted from Kunlun Growth's highest-adoption workflows (345,000+ cumulative community downloads) for **Google Gemini CLI**.
+A curated suite of **10 production-tested Agent Skills** adapted from Kunlun Growth's highest-adoption workflows (over **3,200,000+ cumulative skill downloads** across our ecosystem) for **Google Gemini CLI**.
 
 Built to run **100% locally** with zero telemetry.
 
-> Looking for developer & AI engineering skills (MCP, Skill Builder, Security Guard, Code Review, API Design)? Check out our companion extension: **[kunlun-dev-skills](https://github.com/AIMarshallLee/kunlun-dev-skills)**.
+> Part of the Kunlun Growth Gemini CLI Suite: **kunlun-growth-skills** (Productivity & Research) · **[kunlun-dev-skills](https://github.com/AIMarshallLee/kunlun-dev-skills)** (Developer & MCP) · **[kunlun-biz-skills](https://github.com/AIMarshallLee/kunlun-biz-skills)** (B2B & Finance) · **[kunlun-ecom-skills](https://github.com/AIMarshallLee/kunlun-ecom-skills)** (E-Commerce & Growth Ops)
 
 ---
 
