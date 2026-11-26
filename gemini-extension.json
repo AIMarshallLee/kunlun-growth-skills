@@ -1,6 +1,6 @@
 {
   "name": "kunlun-growth-skills",
-  "version": "1.0.0",
-  "description": "Production-grade productivity, document engineering, self-improving agent memory, and AI workflow diagnosis skills by Kunlun Growth (https://kunlungrowth.com).",
+  "version": "1.1.0",
+  "description": "10 production-grade productivity, document engineering, translation, research, self-improving agent memory, and AI workflow diagnosis skills by Kunlun Growth (https://kunlungrowth.com).",
   "contextFileName": "GEMINI.md"
 }
