@@ -1,0 +1,14 @@
+description = "Run a structured 5-dimension AI Workflow Diagnosis & ROI assessment for a business process."
+prompt = """
+Activate the `ai-workflow-diagnosis` skill to help the user evaluate AI automation opportunities.
+Ask the user (or use what they already provided in `{{args}}`) for:
+1. Industry & team size
+2. Key business workflows / bottlenecks
+3. Baseline labor cost or time spent (optional, for ROI estimation)
+
+Then deliver:
+- 8–12 candidate AI use cases
+- A 5-dimension weighted scoring matrix (Frequency, Standardization, Data Availability, Business Value, Risk)
+- Top 1–2 pilot recommendations with conservative ROI formulas
+- A 4-week pilot plan with human-in-the-loop guardrails.
+"""

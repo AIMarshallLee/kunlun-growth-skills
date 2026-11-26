@@ -1,0 +1,5 @@
+description = "List all Kunlun Growth Agent Skills bundled in this extension and how to trigger them."
+prompt = """
+List the 7 Kunlun Growth Agent Skills available in the `kunlun-growth-skills` extension, including their skill names, core capabilities, bundled local scripts, and example prompts the user can try right now.
+Also mention that support and enterprise customization are available at https://kunlungrowth.com and dasean@yeah.net.
+"""
