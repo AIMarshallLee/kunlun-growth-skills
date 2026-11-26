@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""deck_audit.py — PPT 演示稿（deck.json / .pptx / .html / .md 大纲）只读质检脚本。
+"""deck_audit.py — Read-only quality auditor for presentations (.json / .pptx / .html / .md).
 
-用法:
+Usage:
   python3 scripts/deck_audit.py --file deck.json --minutes 10 --pretty
   python3 scripts/deck_audit.py --file slides.pptx --minutes 15 --pretty
   python3 scripts/deck_audit.py --file deck.html --pretty
-  python3 scripts/deck_audit.py --text "## 第1页 结论..." --minutes 5 --pretty
+  python3 scripts/deck_audit.py --text "## Slide 1 Takeaway..." --minutes 5 --pretty
 
-退出码:
+Exit codes:
   0  PASS / WARN
-  2  E01 缺少必填参数或参数错误
-  3  E02 文件不存在
-  4  E03 文件格式不支持或解析失败
-  5  E04 篇幅/时长超出合理阈值
-  6  E05 存在高危排版缺陷（如占位符未清理或整份无页数）
+  2  E01 Missing or invalid arguments
+  3  E02 File not found
+  4  E03 Unsupported format or parse failure
+  5  E04 Duration out of range (1..240 minutes)
+  6  E05 Blocking defects (e.g., unresolved placeholders or 0 slides)
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-PLACEHOLDER_PATTERNS = ("单击此处添加", "click to add", "[待补]", "todo", "lorem ipsum")
+PLACEHOLDER_PATTERNS = ("click to add", "[tbd]", "todo", "lorem ipsum", "单击此处添加", "[待补]")
 
 
 def fail(code: str, message: str, hint: str, exit_code: int) -> None:
@@ -39,6 +39,11 @@ def fail(code: str, message: str, hint: str, exit_code: int) -> None:
         "fix_hint": hint,
     }, ensure_ascii=False, indent=2))
     sys.exit(exit_code)
+
+
+def _is_cjk_heavy(text: str) -> bool:
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+    return cjk > len(text) * 0.25
 
 
 class SlideHTMLParser(HTMLParser):
@@ -85,10 +90,10 @@ def parse_json_deck(raw: str) -> list[dict[str, Any]]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        fail("E03", f"deck.json 解析失败: {exc}", "请检查 JSON 语法是否闭合。", 4)
+        fail("E03", f"Failed to parse deck.json: {exc}", "Verify valid JSON syntax.", 4)
     slides_raw = data.get("slides") if isinstance(data, dict) else data
     if not isinstance(slides_raw, list):
-        fail("E03", "JSON 必须包含 slides 数组或本身为数组", "示例: {\"slides\": [{\"title\": \"...\", \"bullets\": [...], \"notes\": \"...\"}]}", 4)
+        fail("E03", "JSON must be an array or contain a 'slides' array.", 'Example: {"slides": [{"title": "...", "bullets": [...], "notes": "..."}]}', 4)
     slides: list[dict[str, Any]] = []
     for s in slides_raw:
         if not isinstance(s, dict):
@@ -131,14 +136,14 @@ def parse_pptx(path: Path) -> list[dict[str, Any]]:
     try:
         zf = zipfile.ZipFile(path, "r")
     except zipfile.BadZipFile:
-        fail("E03", f"不是合法的 .pptx 文件: {path.name}", "请确认文件未损坏，或使用 deck.json / .md 传入。", 4)
+        fail("E03", f"Invalid .pptx archive: {path.name}", "Verify the file is not corrupted, or pass deck.json / .md.", 4)
     with zf as z:
         slide_names = sorted(
             [n for n in z.namelist() if re.match(r"^ppt/slides/slide\d+\.xml$", n)],
             key=lambda x: int(re.findall(r"\d+", x)[0]),
         )
         if not slide_names:
-            fail("E03", "压缩包内未找到 ppt/slides/slide*.xml", "请确认这是标准 PowerPoint (.pptx) 文件。", 4)
+            fail("E03", "No ppt/slides/slide*.xml found inside archive.", "Ensure this is a standard PowerPoint (.pptx) file.", 4)
         slides: list[dict[str, Any]] = []
         for idx, sname in enumerate(slide_names, 1):
             root = ET.fromstring(z.read(sname))
@@ -157,7 +162,7 @@ def parse_pptx(path: Path) -> list[dict[str, Any]]:
 
 def audit_slides(slides: list[dict[str, Any]], minutes: int) -> dict[str, Any]:
     if not slides:
-        fail("E05", "未识别到任何幻灯片页面", "请确认文件非空且格式正确。", 6)
+        fail("E05", "No slides detected in input.", "Verify the file is non-empty and properly formatted.", 6)
 
     rec_pages = max(3, round(minutes * 1.3))
     slide_issues: list[dict[str, Any]] = []
@@ -172,35 +177,44 @@ def audit_slides(slides: list[dict[str, Any]], minutes: int) -> dict[str, Any]:
         notes = s["notes"]
         joined = (title + " " + " ".join(lines)).lower()
         errs: list[str] = []
+
         if not title:
-            errs.append("缺少页面标题")
-        elif len(title) > 20:
-            long_title_count += 1
-            errs.append(f"标题过长({len(title)}字 > 20字上限)")
+            errs.append("Missing slide title.")
+        else:
+            title_limit = 24 if _is_cjk_heavy(title) else 72
+            if len(title) > title_limit:
+                long_title_count += 1
+                errs.append(f"Title too long ({len(title)} chars > {title_limit} limit).")
+
         if len(lines) > 6:
             overdense_count += 1
-            errs.append(f"正文行数过多({len(lines)}行 > 6行上限)")
-        long_lines = [len(ln) for ln in lines if len(ln) > 24]
+            errs.append(f"Too many body lines ({len(lines)} lines > 6 limit).")
+
+        long_lines = [ln for ln in lines if len(ln) > (28 if _is_cjk_heavy(ln) else 90)]
         if long_lines:
-            errs.append(f"存在 {len(long_lines)} 行单行超长(>24字)，建议精简或拆分")
+            errs.append(f"{len(long_lines)} line(s) exceed recommended length; split or tighten.")
+
         if not notes and idx > 1:
             missing_notes_count += 1
-            errs.append("缺少演讲者备注")
-        elif len(notes) > 60:
-            errs.append(f"备注偏长({len(notes)}字，建议≤40字口语金句)")
+            errs.append("Missing speaker notes.")
+        elif notes:
+            notes_limit = 60 if _is_cjk_heavy(notes) else 240
+            if len(notes) > notes_limit:
+                errs.append(f"Speaker notes too long ({len(notes)} chars > {notes_limit} limit).")
+
         if any(p in joined for p in PLACEHOLDER_PATTERNS):
             placeholder_hits += 1
-            errs.append("发现未清理占位符文字（如「单击此处添加」/[待补]）")
+            errs.append("Unresolved placeholder text found (e.g., 'Click to add', '[TBD]', 'Lorem ipsum').")
+
         if errs:
-            slide_issues.append({"slide": idx, "title": title[:24], "problems": errs})
+            slide_issues.append({"slide": idx, "title": title[:40], "problems": errs})
 
     global_issues: list[str] = []
     if len(slides) > rec_pages * 1.6:
-        global_issues.append(f"页数 {len(slides)} 偏多（{minutes} 分钟建议约 {rec_pages} 页），存在超时风险")
+        global_issues.append(f"Slide count ({len(slides)}) is high for {minutes} min (recommended ~{rec_pages}); risk of running overtime.")
     elif len(slides) < max(3, int(rec_pages * 0.5)):
-        global_issues.append(f"页数 {len(slides)} 偏少（{minutes} 分钟建议约 {rec_pages} 页），可能信息展开不足")
+        global_issues.append(f"Slide count ({len(slides)}) is low for {minutes} min (recommended ~{rec_pages}); key points may be under-explained.")
 
-    # 10-point scorecard summary
     score = 10.0
     if long_title_count:
         score -= min(2.0, 0.5 * long_title_count)
@@ -234,24 +248,24 @@ def audit_slides(slides: list[dict[str, Any]], minutes: int) -> dict[str, Any]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="PPT 演示稿只读质检脚本")
-    ap.add_argument("--file", help="待检测文件路径（.json / .pptx / .html / .md）")
-    ap.add_argument("--text", help="直接传入 Markdown 大纲文本")
-    ap.add_argument("--minutes", type=int, default=10, help="预计汇报时长（分钟），默认 10")
-    ap.add_argument("--pretty", action="store_true", help="格式化输出 JSON")
+    ap = argparse.ArgumentParser(description="Read-only presentation quality auditor.")
+    ap.add_argument("--file", help="Path to presentation (.json / .pptx / .html / .md)")
+    ap.add_argument("--text", help="Inline Markdown slide outline")
+    ap.add_argument("--minutes", type=int, default=10, help="Target talk duration in minutes (default: 10)")
+    ap.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     args = ap.parse_args()
 
     if args.minutes <= 0 or args.minutes > 240:
-        fail("E04", f"汇报时长超出合理区间 (1~240 分钟): {args.minutes}", "请传入 --minutes 5/10/15/30 等正整数。", 5)
+        fail("E04", f"Duration out of bounds (1..240 minutes): {args.minutes}", "Pass a positive integer like --minutes 5/10/15/30.", 5)
     if not args.file and not args.text:
-        fail("E01", "缺少 --file 或 --text 参数", "示例: python3 scripts/deck_audit.py --file deck.json --minutes 10 --pretty", 2)
+        fail("E01", "Missing --file or --text argument.", "Example: python3 scripts/deck_audit.py --file deck.json --minutes 10 --pretty", 2)
 
     if args.text is not None:
         slides = parse_markdown_deck(args.text)
     else:
         p = Path(args.file).expanduser()
         if not p.exists() or not p.is_file():
-            fail("E02", f"文件不存在: {p}", "请核对路径后再试。", 3)
+            fail("E02", f"File not found: {p}", "Verify the file path and retry.", 3)
         suf = p.suffix.lower()
         if suf == ".pptx":
             slides = parse_pptx(p)
@@ -264,7 +278,7 @@ def main() -> None:
         elif suf in {".md", ".txt"}:
             slides = parse_markdown_deck(p.read_text(encoding="utf-8"))
         else:
-            fail("E03", f"不支持的文件扩展名: {suf}", "仅支持 .json / .pptx / .html / .md / .txt。", 4)
+            fail("E03", f"Unsupported file extension: {suf}", "Supported formats: .json, .pptx, .html, .md, .txt.", 4)
 
     res = audit_slides(slides, args.minutes)
     print(json.dumps(res, ensure_ascii=False, indent=2 if args.pretty else None))
